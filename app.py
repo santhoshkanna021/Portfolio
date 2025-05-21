@@ -7,36 +7,31 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Initialize Flask app
 app = Flask(__name__)
 
 # Configuration
-app.config['SECRET_KEY'] = '7a99e13baaf83baf0b2134fc3666dea6b52a41ce75abdf5724c26019dcd87d15'
-
-
-# MySQL Database Configuration
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or \
     'mysql+pymysql://sandy:Password%4021@localhost/portfolio_db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_POOL_RECYCLE'] = 3600
 app.config['SQLALCHEMY_POOL_PRE_PING'] = True
 
-# Email Configuration
+# Email config
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
 app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME') or "santhoshkannar802@gmail.com"
 app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD') or "rkfnjmrxbctvlfsb"
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME') or "santhoshkannar802@gmail.com"
+app.config['MAIL_DEFAULT_SENDER'] = app.config['MAIL_USERNAME']
 
-
-# Initialize extensions
+# Extensions
 db = SQLAlchemy(app)
 mail = Mail(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# Database Models
+# Models
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -51,10 +46,10 @@ class Post(db.Model):
     author_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     author = db.relationship('User', backref=db.backref('posts', lazy=True))
 
-# User Loader
+# Login manager
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
@@ -87,7 +82,7 @@ def post(post_id):
 @app.route('/admin')
 @login_required
 def admin():
-    if not current_user.is_authenticated or current_user.username != 'admin':
+    if current_user.username != 'admin':
         flash('Access denied', 'danger')
         return redirect(url_for('home'))
     posts = Post.query.order_by(Post.created_at.desc()).all()
@@ -97,24 +92,21 @@ def admin():
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('admin'))
-    
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
         user = User.query.filter_by(username=username).first()
-        
         if user and check_password_hash(user.password, password):
             login_user(user)
-            next_page = request.args.get('next')
-            return redirect(next_page or url_for('admin'))
-        flash('Invalid username or password', 'danger')
+            return redirect(request.args.get('next') or url_for('admin'))
+        flash('Invalid credentials', 'danger')
     return render_template('login.html')
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
-    flash('You have been logged out.', 'info')
+    flash('Logged out successfully.', 'info')
     return redirect(url_for('home'))
 
 @app.route('/contact', methods=['GET', 'POST'])
@@ -123,25 +115,19 @@ def contact():
         name = request.form.get('name', '').strip()
         email = request.form.get('email', '').strip()
         message = request.form.get('message', '').strip()
-
         if not all([name, email, message]):
             flash('All fields are required!', 'danger')
             return redirect(url_for('contact'))
-
         try:
-            msg = Message(
-                subject=f"New Contact from {name}",
-                recipients=[app.config['MAIL_USERNAME']],
-                body=f"Name: {name}\nEmail: {email}\n\nMessage:\n{message}"
-            )
+            msg = Message(subject=f"New Contact from {name}",
+                          recipients=[app.config['MAIL_USERNAME']],
+                          body=f"Name: {name}\nEmail: {email}\n\nMessage:\n{message}")
             mail.send(msg)
-            flash('Your message has been sent successfully!', 'success')
+            flash('Message sent successfully!', 'success')
         except Exception as e:
-            app.logger.error(f"Failed to send email: {str(e)}")
-            flash('Could not send message. Please try again later.', 'danger')
-        
-        return redirect(url_for('contact'))  # Add redirect after sending the email
-
+            app.logger.error(f"Mail Error: {e}")
+            flash('Could not send message.', 'danger')
+        return redirect(url_for('contact'))
     return render_template('contact.html')
 
 # Error Handlers
@@ -154,23 +140,17 @@ def internal_server_error(e):
     db.session.rollback()
     return render_template('500.html'), 500
 
-# Database Initialization
+# DB Init
 def create_tables():
     with app.app_context():
         db.create_all()
-        
-        # Create admin user if not exists
         if not User.query.filter_by(username='admin').first():
-            admin = User(
-                username='admin',
-                email='admin@example.com',
-                password=generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'admin123'))
-            )
+            admin = User(username='admin',
+                         email='admin@example.com',
+                         password=generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'admin123')))
             db.session.add(admin)
             db.session.commit()
 
 if __name__ == '__main__':
     create_tables()
     app.run(debug=True)
-
-
